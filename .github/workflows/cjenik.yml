@@ -1,0 +1,69 @@
+name: Objava dnevnog cjenika
+
+on:
+  schedule:
+    # 05:30 UTC = safely before 08:00 local year-round
+    # (06:30 CET in winter / 07:30 CEST in summer)
+    - cron: '30 5 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cjenik-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generiraj cjenik
+        id: generate
+        env:
+          SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+          SHOPIFY_ADMIN_API_TOKEN: ${{ secrets.SHOPIFY_ADMIN_API_TOKEN }}
+        run: |
+          set +e
+          python3 scripts/generate_price_list.py --out-dir . > generate_stdout.log 2> generate_stderr.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat generate_stdout.log
+          cat generate_stderr.log
+
+      - name: Objavi u docs/ (samo ako je generiranje uspjelo)
+        if: steps.generate.outputs.exit_code == '0'
+        run: python3 scripts/publish_docs.py
+
+      - name: Commit i push
+        if: steps.generate.outputs.exit_code == '0'
+        run: |
+          git config user.name "cjenik-bot"
+          git config user.email "actions@github.com"
+          git add docs/
+          git diff --staged --quiet && echo "Nema promjena za commit." || git commit -m "Automatska objava cjenika $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
+
+      - name: Javi Shopify (uspjeh)
+        if: steps.generate.outputs.exit_code == '0'
+        env:
+          SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+          SHOPIFY_ADMIN_API_TOKEN: ${{ secrets.SHOPIFY_ADMIN_API_TOKEN }}
+        run: |
+          cd docs && python3 ../scripts/update_shopify_status.py success
+
+      - name: Javi Shopify (neuspjeh) i prekini job
+        if: steps.generate.outputs.exit_code != '0'
+        env:
+          SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+          SHOPIFY_ADMIN_API_TOKEN: ${{ secrets.SHOPIFY_ADMIN_API_TOKEN }}
+        run: |
+          ERROR_MSG=$(tail -c 1500 generate_stderr.log)
+          python3 scripts/update_shopify_status.py failed "$ERROR_MSG"
+          echo "Generiranje neuspjesno - javna verzija NIJE dirana, prethodna ostaje na snazi."
+          exit 1
