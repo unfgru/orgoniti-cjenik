@@ -59,7 +59,13 @@ def main():
     if status == "success":
         with open("archive_index.html", encoding="utf-8") as f:
             archive_html = f.read()
+        with open("../generation_result.json", encoding="utf-8") as f:
+            csv_filename = json.load(f)["csv_filename"]
         metafields += [
+            {"ownerId": shop_id, "namespace": "sidrena_cijena", "key": "cjenik_current_filename",
+             "type": "single_line_text_field", "value": csv_filename},
+            {"ownerId": shop_id, "namespace": "sidrena_cijena", "key": "cjenik_dated_url",
+             "type": "url", "value": f"{BASE_URL}archive/{csv_filename}"},
             {"ownerId": shop_id, "namespace": "sidrena_cijena", "key": "cjenik_current_url",
              "type": "url", "value": f"{BASE_URL}cjenik-aktualni.csv"},
             {"ownerId": shop_id, "namespace": "sidrena_cijena", "key": "cjenik_last_updated",

@@ -30,15 +30,16 @@ ARCHIVE_DIR = os.path.join(DOCS_DIR, "archive")
 CURRENT_PATH = os.path.join(DOCS_DIR, "cjenik-aktualni.csv")
 ARCHIVE_INDEX_PATH = os.path.join(DOCS_DIR, "archive_index.html")
 
-# Matches the trailing _YYYYMMDD_HHMM.csv the generator appends
-DATE_RE = re.compile(r"_(\d{8})_(\d{4})\.csv$")
+# Matches the trailing _YYYY-MM-DDTHHMM.csv the generator appends
+# (also the older _YYYYMMDD_HHMM.csv, so pre-existing archive files still get pruned)
+DATE_RE = re.compile(r"_(\d{4})-?(\d{2})-?(\d{2})[T_](\d{4})\.csv$")
 
 
 def parse_date_from_filename(path):
     m = DATE_RE.search(os.path.basename(path))
     if not m:
         return None
-    return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M").replace(tzinfo=TZ)
+    return datetime.strptime("".join(m.groups()), "%Y%m%d%H%M").replace(tzinfo=TZ)
 
 
 def main():

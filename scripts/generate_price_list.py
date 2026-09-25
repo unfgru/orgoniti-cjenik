@@ -33,10 +33,10 @@ TZ = ZoneInfo("Europe/Zagreb")
 # Pending confirmation from the merchant (flagged explicitly, not invented) —
 # see business-info.json in the Shopify theme project for the open questions
 # this maps to. Override via env vars once confirmed; no code change needed.
-OBLIK_PRODAJNOG_OBJEKTA = os.environ.get("OBLIK_PRODAJNOG_OBJEKTA", "OBLIK-POTVRDITI")
+OBLIK_PRODAJNOG_OBJEKTA = os.environ.get("OBLIK_PRODAJNOG_OBJEKTA", "OBRT")
 OZNAKA_PRODAJNOG_OBJEKTA = os.environ.get("OZNAKA_PRODAJNOG_OBJEKTA", "001")
-BROJ_POHRANE = os.environ.get("BROJ_POHRANE", "POHRANA-POTVRDITI")
-ADRESA_SLUG = os.environ.get("ADRESA_SLUG", "MIRNOVECKACESTA48SAMOBOR")
+BROJ_POHRANE = os.environ.get("BROJ_POHRANE", "001")
+ADRESA_SLUG = os.environ.get("ADRESA_SLUG", "MirnoveckaCesta48")
 
 CSV_FIELDNAMES = [
     "Naziv proizvoda",
@@ -203,7 +203,7 @@ def main():
     now = datetime.now(TZ)
     filename = (
         f"{OBLIK_PRODAJNOG_OBJEKTA}_{ADRESA_SLUG}_{OZNAKA_PRODAJNOG_OBJEKTA}_"
-        f"{BROJ_POHRANE}_{now.strftime('%Y%m%d')}_{now.strftime('%H%M')}.csv"
+        f"{BROJ_POHRANE}_{now.strftime('%Y-%m-%dT%H%M')}.csv"
     )
 
     products = fetch_all_products()
