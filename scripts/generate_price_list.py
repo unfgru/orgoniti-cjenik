@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
-Generate the public product price list (javni cjenik) required by
-Odluka o objavi cjenika proizvoda i usluga (NN 101/2026-1213), effective
-1.10.2026, in the CSV format/columns specified by HOK's official template.
+Generate the public price list for goods (cjenik robe) required by
+Pravilnik o nacinu objave cjenika proizvoda (NN 132/2026), in force from
+17.11.2026.
+
+Format (clanak 3. st. 2., clanak 6.): CSV, UTF-8, columns separated by
+semicolon (;), the 11 columns in the order of clanak 3. st. 2. (column
+titles follow HOK's official template). Price list file name (clanak 6.
+st. 3.): ID trgovca _ vrsta prodajnog mjesta _ adresa _ oznaka prodajnog
+mjesta _ ROBA _ broj pohrane _ GGGGMMDD_SSMM.
 
 Reads from Shopify Admin API only; writes a local CSV file plus a
-completeness report and an append-only generation log. Publishing (deciding
-what becomes the public "current" file vs archive) is a separate step —
-see publish_docs.py — so a script failure here can never corrupt what's
-already public.
+completeness report. Publishing (deciding what becomes the public "current"
+file vs archive) is a separate step - see publish_docs.py - so a script
+failure here can never corrupt what's already public.
 
 Required env vars: SHOPIFY_STORE_DOMAIN, SHOPIFY_ADMIN_API_TOKEN
-Optional env vars (filename convention, NN 101/2026-1213 tocka VI.):
-    OBLIK_PRODAJNOG_OBJEKTA, OZNAKA_PRODAJNOG_OBJEKTA, BROJ_POHRANE, ADRESA_SLUG
+Optional env vars (file name parts):
+    TRGOVAC_ID (maticni broj obrta),
+    VRSTA_PRODAJNOG_MJESTA, ADRESA_SLUG, OZNAKA_PRODAJNOG_MJESTA, BROJ_POHRANE
 """
 import csv
 import json
@@ -30,27 +36,37 @@ API_VERSION = "2025-01"
 URL = f"https://{SHOP}/admin/api/{API_VERSION}/graphql.json"
 TZ = ZoneInfo("Europe/Zagreb")
 
-# Pending confirmation from the merchant (flagged explicitly, not invented) —
-# see business-info.json in the Shopify theme project for the open questions
-# this maps to. Override via env vars once confirmed; no code change needed.
-OBLIK_PRODAJNOG_OBJEKTA = os.environ.get("OBLIK_PRODAJNOG_OBJEKTA", "OBRT")
-OZNAKA_PRODAJNOG_OBJEKTA = os.environ.get("OZNAKA_PRODAJNOG_OBJEKTA", "001")
-BROJ_POHRANE = os.environ.get("BROJ_POHRANE", "001")
-ADRESA_SLUG = os.environ.get("ADRESA_SLUG", "MirnoveckaCesta48")
+# File name parts (Pravilnik NN 132/2026, clanak 6. st. 3.). Override via env
+# vars, no code change needed.
+# TRGOVAC_ID: an obrt counts as a natural person, so the matični broj obrta
+# is required (matični broj obrta, from the obrtnica / Obrtni registar).
+TRGOVAC_ID = os.environ.get("TRGOVAC_ID", "98015982")
+VRSTA_PRODAJNOG_MJESTA = os.environ.get("VRSTA_PRODAJNOG_MJESTA", "PRODAJA_NA_DALJINU")
+ADRESA_SLUG = os.environ.get("ADRESA_SLUG", "MirnoveckaCesta48_Samobor")
+OZNAKA_PRODAJNOG_MJESTA = os.environ.get("OZNAKA_PRODAJNOG_MJESTA", "001")
+BROJ_POHRANE = os.environ.get("BROJ_POHRANE", "0001")
 
+# Column order is fixed by clanak 3. st. 2. Titles follow HOK's template.
 CSV_FIELDNAMES = [
-    "Naziv proizvoda",
-    "Šifra",
-    "Marka",
-    "Jedinica mjere",
-    "Cijena za jedinicu mjere",
-    "Maloprodajna cijena",
-    "Poseban oblik prodaje (DA/NE)",
-    "Naziv posebnog oblika prodaje",
-    "Cijena 10.9.2026.",
-    "Barkod",
-    "Dostupnost",
+    "Naziv robe",
+    "Šifra robe, ako je primjenjivo",
+    "Marka robe, ako je primjenjivo",
+    "Neto količina kada je riječ o robi za koju je posebnim propisom uređena obveza isticanja cijene za jedinicu mjere",
+    "Jedinica mjere robe, ako je primjenjivo",
+    "Maloprodajna cijena robe",
+    "Poseban oblik prodaje robe (DA/NE)",
+    "Cijena za jedinicu mjere robe, ako je primjenjivo",
+    "Barkod robe, ako je primjenjivo",
+    "EAN barkod robe, ako je primjenjivo",
+    "Bazna cijena robe",
 ]
+(C_NAZIV, C_SIFRA, C_MARKA, C_NETO, C_JM, C_CIJENA, C_POSEBNI, C_CIJENA_JM, C_BARKOD, C_EAN, C_BAZNA) = CSV_FIELDNAMES
+
+
+def money(value):
+    """Croatian decimal format (comma), always two decimals, EUR implied."""
+    return f"{float(value):.2f}".replace(".", ",")
+
 
 PRODUCTS_QUERY = """
 query ($cursor: String) {
@@ -142,35 +158,38 @@ def build_rows(products):
 
             sifra = v["sku"] or v["id"].rsplit("/", 1)[-1]
 
-            unit_amount = v["unitPrice"]["amount"] if v["unitPrice"] else ""
-            unit_measure = ""
-            if unit_amount and v["unitPriceMeasurement"] and v["unitPriceMeasurement"]["quantityUnit"]:
+            neto, jedinica, cijena_jm = "", "", ""
+            if v["unitPrice"] and v["unitPrice"]["amount"] and v["unitPriceMeasurement"] and v["unitPriceMeasurement"]["quantityUnit"]:
                 q = v["unitPriceMeasurement"]
-                unit_measure = f'{q["quantityValue"]} {q["quantityUnit"]}'
+                neto = str(q["quantityValue"]).replace(".", ",")
+                jedinica = q["quantityUnit"]
+                cijena_jm = money(v["unitPrice"]["amount"])
 
             price = float(v["price"])
             compare_at = float(v["compareAtPrice"]) if v["compareAtPrice"] else None
             on_sale = compare_at is not None and compare_at > price
-            special_sale_name = "Snizenje" if on_sale else ""
 
             anchor_price, verification_status = extract_anchor_price(v["metafields"]["edges"])
             if not anchor_price:
-                completeness_issues.append(f'{naziv} (sifra {sifra}): nedostaje sidrena cijena')
+                completeness_issues.append(f'{naziv} (sifra {sifra}): nedostaje bazna cijena')
             elif verification_status == "procjena":
-                completeness_issues.append(f'{naziv} (sifra {sifra}): sidrena cijena jos nije potvrdjena (status=procjena)')
+                completeness_issues.append(f'{naziv} (sifra {sifra}): bazna cijena jos nije potvrdjena (status=procjena)')
+
+            barkod = v["barcode"] or ""
+            ean = barkod if (barkod.isdigit() and len(barkod) == 13) else ""
 
             rows.append({
-                "Naziv proizvoda": naziv,
-                "Šifra": sifra,
-                "Marka": product["vendor"] or "",
-                "Jedinica mjere": unit_measure,
-                "Cijena za jedinicu mjere": f"{float(unit_amount):.2f}" if unit_amount else "",
-                "Maloprodajna cijena": f"{price:.2f}",
-                "Poseban oblik prodaje (DA/NE)": "DA" if on_sale else "NE",
-                "Naziv posebnog oblika prodaje": special_sale_name,
-                "Cijena 10.9.2026.": f"{float(anchor_price):.2f}" if anchor_price else "",
-                "Barkod": v["barcode"] or "",
-                "Dostupnost": "dostupan" if v["availableForSale"] else "nedostupan",
+                C_NAZIV: naziv,
+                C_SIFRA: sifra,
+                C_MARKA: product["vendor"] or "",
+                C_NETO: neto,
+                C_JM: jedinica,
+                C_CIJENA: money(price),
+                C_POSEBNI: "DA" if on_sale else "NE",
+                C_CIJENA_JM: cijena_jm,
+                C_BARKOD: barkod,
+                C_EAN: ean,
+                C_BAZNA: money(anchor_price) if anchor_price else "",
             })
     return rows, completeness_issues
 
@@ -180,18 +199,18 @@ def validate(rows, expected_min_rows):
     if len(rows) < expected_min_rows:
         errors.append(f"Broj redaka ({len(rows)}) manji od ocekivanog ({expected_min_rows}) - moguce nepotpuno generiranje.")
     for i, row in enumerate(rows):
-        if not row["Naziv proizvoda"] or not row["Šifra"]:
+        if not row[C_NAZIV] or not row[C_SIFRA]:
             errors.append(f"Redak {i}: nedostaje naziv ili sifra.")
         try:
-            float(row["Maloprodajna cijena"])
+            float(row[C_CIJENA].replace(",", "."))
         except ValueError:
-            errors.append(f'Redak {i} ({row["Naziv proizvoda"]}): neispravna maloprodajna cijena.')
+            errors.append(f'Redak {i} ({row[C_NAZIV]}): neispravna maloprodajna cijena.')
     return errors
 
 
 def write_csv(rows, path):
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES, delimiter=";")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -202,8 +221,8 @@ def main():
 
     now = datetime.now(TZ)
     filename = (
-        f"{OBLIK_PRODAJNOG_OBJEKTA}_{ADRESA_SLUG}_{OZNAKA_PRODAJNOG_OBJEKTA}_"
-        f"{BROJ_POHRANE}_{now.strftime('%Y-%m-%dT%H%M')}.csv"
+        f"{TRGOVAC_ID}_{VRSTA_PRODAJNOG_MJESTA}_{ADRESA_SLUG}_{OZNAKA_PRODAJNOG_MJESTA}_"
+        f"ROBA_{BROJ_POHRANE}_{now.strftime('%Y%m%d_%H%M')}.csv"
     )
 
     products = fetch_all_products()
